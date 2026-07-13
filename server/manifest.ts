@@ -1,7 +1,6 @@
 import type { Page } from 'playwright';
 import type { ManifestElement } from '../shared/types.ts';
 
-// ---- DOM → numbered manifest of interactive elements ----
 const EXTRACTOR = `() => {
   const sel = 'a,button,input,textarea,select,[role=button],[role=link],[role=textbox],[role=checkbox],[contenteditable=true]';
   const out = [];
@@ -51,7 +50,24 @@ export async function extractManifest(page: Page): Promise<ManifestElement[]> {
   return result ?? [];
 }
 
-// ---- Captcha detection ----
+const PAGE_TEXT_PROBE = `() => {
+  const clone = document.body?.cloneNode(true);
+  if (!clone) return '';
+  clone.querySelectorAll('script,style,noscript,svg,iframe,canvas,nav,footer,header,[aria-hidden="true"]').forEach((node) => node.remove());
+  return (clone.innerText || '')
+    .replace(/\\s+/g, ' ')
+    .trim()
+    .slice(0, 12000);
+}`;
+
+export async function extractVisibleText(page: Page): Promise<string> {
+  try {
+    return ((await page.evaluate(`(${PAGE_TEXT_PROBE})()`)) as string | undefined) ?? '';
+  } catch {
+    return '';
+  }
+}
+
 const CAPTCHA_PROBE = `() => {
   const frames = 'iframe[src*="recaptcha"],iframe[src*="hcaptcha"],iframe[src*="turnstile"],.g-recaptcha,.h-captcha,.cf-turnstile,#captcha';
   if (document.querySelector(frames)) return true;

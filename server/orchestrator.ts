@@ -2,8 +2,8 @@ import type { Task } from '../shared/types.ts';
 import { serverStore as S } from './store.ts';
 import { Executor } from './executor.ts';
 import { decideAction, summarizeRun } from './llm.ts';
-import { detectCaptcha, extractManifest } from './manifest.ts';
-import { setPreferredPassword, allowDomain, setCredential } from './vault.ts';
+import { detectCaptcha, extractManifest, extractVisibleText } from './manifest.ts';
+import { setPreferredPassword, allowDomain, setCredential, remember, memoryContext } from './vault.ts';
 
 const MAX_STEPS = 25;
 
@@ -52,6 +52,7 @@ export class Orchestrator {
     const page = this.executor.getPage();
     const history: string[] = [];
     const actionCounts = new Map<string, number>();
+    let failedActions = 0;
     let injectedContext: string | undefined;
     let finished = false;
 
@@ -69,7 +70,8 @@ export class Orchestrator {
         continue;
       }
 
-      const action = await decideAction({ task, url: page.url(), manifest, history, injectedContext });
+      const pageText = await extractVisibleText(page);
+      const action = await decideAction({ task, url: page.url(), manifest, pageText, userContext: userContextText(), history, injectedContext });
       injectedContext = undefined;
 
       const actionKey = JSON.stringify(action);
@@ -93,11 +95,16 @@ export class Orchestrator {
         await sleep(650);
       }
 
-      const result = await this.executor.execute(action, manifest);
+      const result = (await this.executor.execute(action, manifest)) ?? {
+        ok: false,
+        note: `Unsupported or empty action returned for "${action.type}"`,
+      };
       this.clearOverlay();
       history.push(`${action.type}: ${result.note}`);
       S.addLog({ taskId: task.id, step, action: action.type, note: result.note, at: Date.now() });
       console.log(`[browser] task=${task.id} step=${step} action=${action.type} ok=${result.ok} note=${result.note}`);
+
+      failedActions = result.ok ? 0 : failedActions + 1;
 
       if (repeats === 2) history.push('note: that exact action was already tried, do something different');
 
@@ -111,18 +118,29 @@ export class Orchestrator {
         injectedContext = value;
         continue;
       }
+      if (!result.ok && shouldUseManualMode(result.note, failedActions)) {
+        const value = await this.park(task, 'manual', manualReason(result.note));
+        if (value === CANCELLED) return this.finishCancelled(activityId, task);
+        history.push(`manual: user helped with the page (${value})`);
+        injectedContext = `The user helped with the page: ${value}`;
+        failedActions = 0;
+        continue;
+      }
       await sleep(400);
     }
 
     const notes = S.logsFor(task.id).map((l) => l.note);
-    const summary = finished
-      ? await summarizeRun(task.title, notes)
-      : 'This task could not be finished. Open it to see what happened.';
     const files = await this.executor.takeDownloads();
-    S.updateTask(task.id, { status: 'done', summary, result: { summary, details: notes, files } });
+    const result = finished
+      ? await summarizeRun(task.title, notes, files.map((file) => ({ name: file.name, size: file.size })))
+      : {
+          summary: 'This task could not be finished. Open it to see what happened.',
+          details: notes,
+        };
+    S.updateTask(task.id, { status: 'done', summary: result.summary, result: { ...result, files } });
     this.executor.setActiveTask(null);
     this.clearOverlay();
-    S.chat({ id: activityId, kind: 'activity', state: 'done', text: task.title, detail: summary, createdAt: Date.now() });
+    S.chat({ id: activityId, kind: 'activity', state: 'done', text: task.title, detail: result.summary, createdAt: Date.now() });
   }
 
   private finishCancelled(activityId: string, task: Task) {
@@ -141,12 +159,13 @@ export class Orchestrator {
       this.blockWaiters.set(task.id, (value, opts) => {
         this.stopManualRefresh();
         if (opts.cancelled) return resolve(CANCELLED);
-        const domain = this.executor.domain();
         if (kind === 'password_setup') {
+          const domain = this.safeDomain();
           if (opts.applyToAll) setPreferredPassword(value);
           setCredential(domain, { username: '', password: value });
         }
-        if (kind === 'domain_permission' || opts.allowDomain) allowDomain(domain);
+        if (kind === 'memory') remember(memoryKeyFromReason(reason), value);
+        if (kind === 'domain_permission' || opts.allowDomain) allowDomain(this.safeDomain());
         S.updateTask(task.id, { status: 'running', blockedKind: undefined, blockedReason: undefined });
         this.manualTaskId = null;
         S.browser({ ...S.browserView, manual: false, manualReason: undefined });
@@ -198,6 +217,22 @@ export class Orchestrator {
     if (this.manualTaskId) this.resolveBlock(this.manualTaskId, 'done', {});
   }
 
+  async goHome() {
+    await this.ensureStarted();
+    this.stopManualRefresh();
+    this.manualTaskId = null;
+    const page = this.executor.getPage();
+    await page.goto('https://www.google.com/', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+    S.browser({
+      url: page.url(),
+      title: await page.title().catch(() => 'Google'),
+      screenshot: await this.executor.screenshot(true).catch(() => undefined),
+      manual: false,
+      manualReason: undefined,
+    });
+    this.clearOverlay();
+  }
+
   private startManualRefresh() {
     this.stopManualRefresh();
     this.manualTimer = setInterval(async () => {
@@ -209,7 +244,7 @@ export class Orchestrator {
       } finally {
         this.manualBusy = false;
       }
-    }, 900);
+    }, 300);
   }
 
   private stopManualRefresh() {
@@ -233,6 +268,14 @@ export class Orchestrator {
   private clearOverlay() {
     S.overlay({ cursorPos: { x: 0.5, y: 0.5 }, isActive: false, hoveredBbox: null, isCapturing: false });
   }
+
+  private safeDomain(): string {
+    try {
+      return this.executor.domain();
+    } catch {
+      return 'unknown';
+    }
+  }
 }
 
 interface ResolveOpts {
@@ -244,6 +287,37 @@ interface ResolveOpts {
 const CANCELLED = 'docket:task-cancelled';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function userContextText(): string {
+  return memoryContext();
+}
+
+function memoryKeyFromReason(reason: string): string {
+  const lower = reason.toLowerCase();
+  if (/city|where.*live|live in|town/.test(lower)) return 'city';
+  if (/location|zip|postal|area|near me|nearby/.test(lower)) return 'location';
+  if (/timezone|time zone/.test(lower)) return 'timezone';
+  if (/diet|food|meal|allerg|vegetarian|vegan/.test(lower)) return 'food preferences';
+  if (/format|style|tone|write/.test(lower)) return 'response preferences';
+  return 'user context';
+}
+
+function shouldUseManualMode(note: string, failures: number): boolean {
+  return (
+    /intercepts pointer events|Timeout .*exceeded|not visible|not enabled|detached|no interactive elements|Unsupported action/i.test(note) ||
+    failures >= 2
+  );
+}
+
+function manualReason(note: string): string {
+  if (/intercepts pointer events|modal|dialog/i.test(note)) {
+    return 'A popup is blocking the page. Close it or choose the needed option, then resume.';
+  }
+  if (/Timeout .*exceeded|not visible|not enabled|detached/i.test(note)) {
+    return 'The page control did not respond. Help with the next small browser action, then resume.';
+  }
+  return 'The browser got stuck. Make the next small page action, then resume.';
+}
 
 async function extractManifestEventually(page: Parameters<typeof extractManifest>[0]) {
   let lastError: unknown;

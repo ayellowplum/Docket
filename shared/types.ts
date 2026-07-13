@@ -36,9 +36,10 @@ export type BlockedKind =
   | 'credential'
   | 'password_setup'
   | 'domain_permission'
+  | 'manual'
+  | 'memory'
   | 'ambiguous';
 
-// ---- Chat ----
 export type ChatKind = 'user' | 'assistant' | 'activity';
 
 export interface ChatMessage {
@@ -55,6 +56,9 @@ export type ChatAction =
   | { type: 'add_task'; title: string; priority?: 'high' | 'normal' }
   | { type: 'remove_task'; query: string }
   | { type: 'prioritize_task'; query: string }
+  | { type: 'remember'; key: string; value: string }
+  | { type: 'forget_memory'; query: string }
+  | { type: 'list_memories' }
   | { type: 'list_tasks' }
   | { type: 'clear_tasks' }
   | { type: 'run' };
@@ -64,7 +68,14 @@ export interface ChatResult {
   actions: ChatAction[];
 }
 
-// ---- Browser agent ----
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  empty: boolean;
+}
+
 export interface ManifestElement {
   id: number;
   role: string;
@@ -79,9 +90,16 @@ export type AgentAction =
   | { type: 'fill_field'; id: number; field: FieldType }
   | { type: 'scroll'; to?: number; direction?: 'up' | 'down' }
   | { type: 'navigate'; url: string }
+  | { type: 'home' }
   | { type: 'wait'; ms: number }
+  | { type: 'storage'; op: StorageOp; path?: string; content?: string }
+  | { type: 'memory'; op: MemoryOp; key?: string; value?: string; query?: string }
+  | { type: 'command'; command: string }
   | { type: 'done'; note?: string }
   | { type: 'blocked'; reason: string; kind: BlockedKind };
+
+export type StorageOp = 'list' | 'read' | 'write' | 'delete' | 'attach';
+export type MemoryOp = 'list' | 'remember' | 'forget';
 
 export type BrowserKey =
   | 'Enter'
@@ -123,9 +141,18 @@ export interface BrowserView {
   manualReason?: string;
 }
 
-// ---- WebSocket protocol ----
 export type ServerEvent =
-  | { type: 'state'; tasks: Task[]; chat: ChatMessage[]; browser: BrowserView; overlay: AgentOverlayState; setup: { ready: boolean; profile?: SetupProfile } }
+  | {
+      type: 'state';
+      tasks: Task[];
+      chat: ChatMessage[];
+      sessions: ChatSessionSummary[];
+      activeSessionId: string;
+      browser: BrowserView;
+      overlay: AgentOverlayState;
+      setup: { ready: boolean; profile?: SetupProfile };
+    }
+  | { type: 'sessions'; sessions: ChatSessionSummary[]; activeSessionId: string }
   | { type: 'task_added'; task: Task }
   | { type: 'task_updated'; task: Task }
   | { type: 'task_removed'; taskId: string }
@@ -141,6 +168,8 @@ export type ClientCommand =
   | { type: 'message'; text: string }
   | { type: 'resolve_block'; taskId: string; value: string; applyToAll?: boolean; allowDomain?: boolean }
   | { type: 'new_chat' }
+  | { type: 'switch_chat'; sessionId: string }
+  | { type: 'browser_home' }
   | { type: 'browser_pointer'; x: number; y: number }
   | { type: 'browser_key'; key: string; text?: string }
   | { type: 'resume_agent' }

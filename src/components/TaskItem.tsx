@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { BlockedKind, Task } from '../../shared/types';
 import { useStore } from '../store';
@@ -16,6 +16,8 @@ const blockMeta: Record<BlockedKind, { question: string; input?: boolean; secret
     checkbox: 'Use this for all future signups too',
   },
   domain_permission: { question: 'Docket wants to use your saved credentials on this site.', confirm: 'Allow' },
+  manual: { question: 'Help with the next small browser action, then resume.' },
+  memory: { question: 'What should Docket remember for this?', input: true },
   ambiguous: { question: 'How should I proceed?', input: true },
 };
 
@@ -23,7 +25,7 @@ export const TaskItem = forwardRef<
   HTMLDivElement,
   {
     task: Task;
-    onResolve: (taskId: string, value: string, applyToAll: boolean) => void;
+    onResolve: (taskId: string, value: string, applyToAll: boolean, allowDomain?: boolean) => void;
   }
 >(function TaskItem({ task, onResolve }, ref) {
   const [value, setValue] = useState('');
@@ -80,12 +82,11 @@ export const TaskItem = forwardRef<
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.1 }}
               >
-                {task.summary}
+                {renderAnnotatedText(task.summary)}
               </motion.span>
             )}
           </div>
         </div>
-        {task.status === 'queued' && <span className="task-tag">queued</span>}
       </div>
 
       <AnimatePresence initial={false}>
@@ -98,14 +99,22 @@ export const TaskItem = forwardRef<
             transition={{ height: { duration: 0.34, ease: 'easeOut' }, opacity: { duration: 0.2 } }}
             onClick={(event) => event.stopPropagation()}
           >
-            {task.result?.summary && <p>{task.result.summary}</p>}
+            {task.result?.summary && <p>{renderAnnotatedText(task.result.summary)}</p>}
             {((task.result?.details.length ?? 0) > 0 || liveLogs.length > 0) && (
-              <ol>{(task.result?.details ?? liveLogs.map((entry) => entry.note)).map((detail, index) => <li key={`${index}-${detail}`}>{detail}</li>)}</ol>
+              <ol>
+                {(task.result?.details ?? liveLogs.map((entry) => entry.note)).map((detail, index) => (
+                  <li key={`${index}-${detail}`}>{renderAnnotatedText(detail)}</li>
+                ))}
+              </ol>
             )}
             {task.result && task.result.files.length > 0 && (
               <div className="result-files">
+                <span className="result-files-title">Files</span>
                 {task.result.files.map((file) => (
-                  <a key={file.id} href={file.url} download>{file.name}</a>
+                  <a key={file.id} href={file.url} download>
+                    <span>{file.name}</span>
+                    <small>{formatBytes(file.size)}</small>
+                  </a>
                 ))}
               </div>
             )}
@@ -148,7 +157,7 @@ export const TaskItem = forwardRef<
               </div>
             )}
             {meta?.confirm && (
-              <button className="block-allow" onClick={() => onResolve(task.id, 'allow', applyAll)}>
+              <button className="block-allow" onClick={() => onResolve(task.id, 'allow', applyAll, true)}>
                 {meta.confirm}
               </button>
             )}
@@ -168,3 +177,28 @@ export const TaskItem = forwardRef<
     </motion.div>
   );
 });
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderAnnotatedText(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const pattern = /\[\[([^|\]]+)\|([^\]]+)\]\]/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text))) {
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    parts.push(
+      <span className="result-note" tabIndex={0} key={`${match.index}-${match[1]}`}>
+        {match[1]}
+        <span className="result-note-pop">{match[2]}</span>
+      </span>
+    );
+    last = pattern.lastIndex;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts.length ? parts : [text];
+}

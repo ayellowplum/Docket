@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowUp, SquarePen } from 'lucide-react';
+import { ArrowUp, ChevronDown, ChevronUp, SquarePen } from 'lucide-react';
 import type { ChatMessage } from '../../shared/types';
 import { useStore } from '../store';
 import { send } from '../lib/ws';
@@ -93,9 +93,15 @@ function Message({ m }: { m: ChatMessage }) {
 
 export function ChatPanel({ onSend }: { onSend: (text: string) => void }) {
   const chat = useStore((s) => s.chat);
+  const tasks = useStore((s) => s.tasks);
+  const sessions = useStore((s) => s.sessions);
+  const activeSessionId = useStore((s) => s.activeSessionId);
   const [text, setText] = useState('');
+  const [sessionOpen, setSessionOpen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const inEmptyChat = chat.length === 0 && tasks.length === 0;
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: 'smooth' });
@@ -115,7 +121,47 @@ export function ChatPanel({ onSend }: { onSend: (text: string) => void }) {
     <div className="chat">
       <div className="chat-head">
         <h1 className="wordmark">Docket</h1>
-        <button className="new-chat" aria-label="New chat" title="New chat" onClick={() => send({ type: 'new_chat' })}>
+        <div className="chat-switcher">
+          <button className="chat-select" onClick={() => setSessionOpen((open) => !open)}>
+            <span>{activeSession?.title || 'New chat'}</span>
+            {sessionOpen ? (
+              <ChevronUp className="chat-select-arrow" size={12} strokeWidth={1.8} />
+            ) : (
+              <ChevronDown className="chat-select-arrow" size={12} strokeWidth={1.8} />
+            )}
+          </button>
+          <AnimatePresence>
+            {sessionOpen && (
+              <motion.div
+                className="chat-menu"
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.16, ease: 'easeOut' }}
+              >
+                {sessions.map((session) => (
+                  <button
+                    key={session.id}
+                    className={session.id === activeSessionId ? 'active' : ''}
+                    onClick={() => {
+                      setSessionOpen(false);
+                      if (session.id !== activeSessionId) send({ type: 'switch_chat', sessionId: session.id });
+                    }}
+                  >
+                    <span>{session.title}</span>
+                    {!session.empty && <small>{formatSessionTime(session.updatedAt)}</small>}
+                  </button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+        <button
+          className={`new-chat ${inEmptyChat ? 'idle-empty' : ''}`}
+          aria-label="New chat"
+          title="New chat"
+          onClick={() => !inEmptyChat && send({ type: 'new_chat' })}
+        >
           <SquarePen size={16} strokeWidth={1.8} />
         </button>
       </div>
@@ -164,4 +210,9 @@ export function ChatPanel({ onSend }: { onSend: (text: string) => void }) {
       </div>
     </div>
   );
+}
+
+function formatSessionTime(value: number): string {
+  const date = new Date(value);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }

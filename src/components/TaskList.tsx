@@ -6,17 +6,15 @@ import { send } from '../lib/ws';
 export function TaskList() {
   const tasks = useStore((s) => s.tasks);
 
-  const remaining = tasks.filter((t) => t.status === 'queued' || t.status === 'running').length;
-
-  function handleResolve(taskId: string, value: string, applyAll: boolean) {
-    send({ type: 'resolve_block', taskId, value, applyToAll: applyAll, allowDomain: true });
+  function handleResolve(taskId: string, value: string, applyAll: boolean, allowDomain = false) {
+    send({ type: 'resolve_block', taskId, value, applyToAll: applyAll, allowDomain });
   }
 
   return (
     <div className="tasklist">
       <div className="tasklist-head">
         <span className="label">Tasks</span>
-        {tasks.length > 0 && <span className="count">{remaining}</span>}
+        {tasks.length > 0 && <span className="count">{tasks.length}</span>}
       </div>
 
       <div className="tasks-scroll scroll">

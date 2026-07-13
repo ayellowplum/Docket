@@ -1,5 +1,6 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { Home } from 'lucide-react';
 import { useStore } from '../store';
 import { ActivityOverlay } from './ActivityOverlay';
 import { send } from '../lib/ws';
@@ -44,15 +45,31 @@ export function BrowserView() {
   const browser = useStore((s) => s.browser);
   const overlay = useStore((s) => s.overlay);
   const tasks = useStore((s) => s.tasks);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [linger, setLinger] = useState(false);
 
-  const active = tasks.some((t) => t.status === 'running' || t.status === 'blocked');
-  const on = active && Boolean(browser.screenshot);
+  const active = tasks.some((task) => task.status === 'running' || task.status === 'blocked') || Boolean(browser.manual);
+  const on = Boolean(browser.screenshot) && (active || linger);
 
   const { zoom, transform } = computeFocus(overlay.hoveredBbox, overlay.isActive);
+
+  useEffect(() => {
+    if (active) {
+      setLinger(true);
+      return;
+    }
+    const timer = setTimeout(() => setLinger(false), 1000);
+    return () => clearTimeout(timer);
+  }, [active, browser.screenshot]);
 
   return (
     <div className={`tv ${on ? 'on' : 'off'}`}>
       <div className="tv-bar">
+        {on && (
+          <button className="tv-home" aria-label="Go home" title="Google home" onClick={() => send({ type: 'browser_home' })}>
+            <Home size={13} strokeWidth={1.8} />
+          </button>
+        )}
         <span className="tv-url">{on ? browser.url : ''}</span>
         {browser.loading && <span className="caret" />}
         <span className="sp" />
@@ -69,7 +86,7 @@ export function BrowserView() {
               exit={{ opacity: 0 }}
               transition={{ duration: 0.35, ease: 'easeOut' }}
             >
-              <div className="viewport">
+              <div className="viewport" ref={viewportRef}>
                 <div
                   className="stage-inner"
                   style={{ transform, ['--zoom' as string]: zoom } as CSSProperties}
@@ -101,11 +118,11 @@ export function BrowserView() {
             tabIndex={0}
             aria-label="Interactive browser"
             onPointerDown={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
+              const rect = viewportRef.current?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
               send({
                 type: 'browser_pointer',
-                x: (event.clientX - rect.left) / rect.width,
-                y: (event.clientY - rect.top) / rect.height,
+                x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
+                y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
               });
               event.currentTarget.focus();
             }}

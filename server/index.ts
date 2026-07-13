@@ -1,4 +1,7 @@
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { ChatAction, ClientCommand, Task } from '../shared/types.ts';
@@ -7,9 +10,8 @@ import { orchestrator } from './orchestrator.ts';
 import { chatAgent, configureLlm, isLlmReady, llmInfo, validateLlm } from './llm.ts';
 import { resultFiles } from './resultFiles.ts';
 import { DEFAULT_BACKEND_PORT } from '../shared/config.ts';
-import { setProfile } from './vault.ts';
+import { forgetMemory, listMemories, remember, setProfile } from './vault.ts';
 
-// ---- HTTP API ----
 const app = express();
 app.use(express.json());
 
@@ -23,7 +25,12 @@ app.get('/api/files/:id', (req, res) => {
   res.download(file.path, file.name);
 });
 
-// ---- WebSocket protocol ----
+const distDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../dist');
+if (fs.existsSync(distDir)) {
+  app.use(express.static(distDir));
+  app.get('*', (_req, res) => res.sendFile(path.join(distDir, 'index.html')));
+}
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -61,7 +68,14 @@ async function handleCommand(cmd: ClientCommand) {
       });
       break;
     case 'new_chat':
-      S.clearChat();
+      S.newChat();
+      S.setHomeView();
+      break;
+    case 'switch_chat':
+      if (S.switchChat(cmd.sessionId)) S.setHomeView();
+      break;
+    case 'browser_home':
+      await orchestrator.goHome();
       break;
     case 'browser_pointer':
       await orchestrator.handlePointer(cmd.x, cmd.y);
@@ -91,7 +105,6 @@ async function handleCommand(cmd: ClientCommand) {
   }
 }
 
-// ---- Chat handling ----
 async function handleMessage(text: string) {
   if (!isLlmReady()) return;
   S.chat({ id: id('c'), kind: 'user', text, createdAt: Date.now() });
@@ -121,7 +134,6 @@ async function handleMessage(text: string) {
   if (shouldRun) orchestrator.runLoop();
 }
 
-// ---- Task actions ----
 function applyAction(action: ChatAction): boolean {
   switch (action.type) {
     case 'add_task': {
@@ -156,6 +168,21 @@ function applyAction(action: ChatAction): boolean {
         return true;
       }
       activity(`nothing matching “${action.query}”`);
+      return false;
+    }
+    case 'remember': {
+      const memory = remember(action.key, action.value);
+      activity(`remembered ${memory.key}`);
+      return false;
+    }
+    case 'forget_memory': {
+      const removed = forgetMemory(action.query);
+      activity(removed.length ? `forgot ${removed.map((memory) => memory.key).join(', ')}` : `no memory matching "${action.query}"`);
+      return false;
+    }
+    case 'list_memories': {
+      const memories = listMemories();
+      activity(memories.length ? `memories: ${memories.map((memory) => `${memory.key}: ${memory.value}`).join('; ')}` : 'no permanent memories yet');
       return false;
     }
     case 'list_tasks': {
@@ -196,7 +223,6 @@ function findTask(query: string): Task | undefined {
   );
 }
 
-// ---- Startup ----
 const PORT = DEFAULT_BACKEND_PORT;
 server.listen(PORT, () => {
   console.log(`\n  Docket backend running at http://localhost:${PORT}`);

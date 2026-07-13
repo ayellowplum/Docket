@@ -5,6 +5,8 @@ import type { AgentAction, BrowserKey, ManifestElement, TaskResultFile } from '.
 import { selectorForId } from './manifest.ts';
 import { resolveField } from './credentialResolver.ts';
 import { resultFiles } from './resultFiles.ts';
+import { runStorageAction, runWorkspaceCommand } from './workspace.ts';
+import { forgetMemory, listMemories, remember } from './vault.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_DATA_DIR = path.join(__dirname, '.data', 'chromium-profile');
@@ -35,6 +37,7 @@ export class Executor {
   private page: Page | null = null;
   private activeTaskId: string | null = null;
   private downloads: Promise<TaskResultFile>[] = [];
+  private attachments: TaskResultFile[] = [];
 
   async start(headless = false): Promise<Page> {
     this.context = await chromium.launchPersistentContext(USER_DATA_DIR, {
@@ -70,6 +73,7 @@ export class Executor {
   setActiveTask(taskId: string | null) {
     this.activeTaskId = taskId;
     if (taskId) this.downloads = [];
+    if (taskId) this.attachments = [];
   }
 
   private watchDownloads(page: Page) {
@@ -81,7 +85,12 @@ export class Executor {
   async takeDownloads(): Promise<TaskResultFile[]> {
     const files = await Promise.all(this.downloads);
     this.downloads = [];
-    return files;
+    const seen = new Set<string>();
+    return [...files, ...this.attachments].filter((file) => {
+      if (seen.has(file.id)) return false;
+      seen.add(file.id);
+      return true;
+    });
   }
 
   async pointer(x: number, y: number) {
@@ -101,6 +110,10 @@ export class Executor {
         case 'navigate':
           await page.goto(action.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
           return { ok: true, note: `Navigated to ${action.url}` };
+
+        case 'home':
+          await page.goto('https://www.google.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+          return { ok: true, note: 'Reset browser to Google home' };
 
         case 'click': {
           await page.click(selectorForId(action.id), { timeout: 8000 });
@@ -151,12 +164,47 @@ export class Executor {
           await page.waitForTimeout(Math.min(action.ms, 10000));
           return { ok: true, note: `Waited ${action.ms}ms` };
 
+        case 'storage': {
+          if (!this.activeTaskId) return { ok: false, note: 'No active task storage is available' };
+          const result = runStorageAction(this.activeTaskId, action);
+          if (result.attachPath) {
+            this.attachments.push(resultFiles.register(this.activeTaskId, result.attachPath));
+          }
+          return { ok: true, note: result.note };
+        }
+
+        case 'memory': {
+          if (action.op === 'list') {
+            const entries = listMemories();
+            return {
+              ok: true,
+              note: entries.length ? `Permanent memories:\n${entries.map((entry) => `${entry.key}: ${entry.value}`).join('\n')}` : 'No permanent memories saved.',
+            };
+          }
+          if (action.op === 'remember') {
+            const entry = remember(action.key ?? 'memory', action.value ?? '');
+            return { ok: true, note: `Remembered ${entry.key}: ${entry.value}` };
+          }
+          if (action.op === 'forget') {
+            const removed = forgetMemory(action.query ?? action.key ?? '');
+            return { ok: true, note: removed.length ? `Forgot ${removed.map((entry) => entry.key).join(', ')}` : 'No matching memory found.' };
+          }
+          return { ok: false, note: `Unsupported memory operation: ${action.op}` };
+        }
+
+        case 'command': {
+          if (!this.activeTaskId) return { ok: false, note: 'No active task workspace is available' };
+          const output = await runWorkspaceCommand(this.activeTaskId, action.command);
+          return { ok: true, note: `Ran command: ${action.command}\n${output}` };
+        }
+
         case 'done':
           return { ok: true, note: action.note ?? 'Task complete', done: true };
 
         case 'blocked':
           return { ok: false, note: action.reason, block: { kind: action.kind, reason: action.reason } };
       }
+      return { ok: false, note: `Unsupported action: ${(action as { type?: string }).type ?? 'unknown'}` };
     } catch (err) {
       return { ok: false, note: `Action failed: ${(err as Error).message}` };
     }

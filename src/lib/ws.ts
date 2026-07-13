@@ -1,15 +1,10 @@
 import type { ClientCommand, ServerEvent } from '../../shared/types';
 import { useStore } from '../store';
-import { DEFAULT_BACKEND_PORT } from '../../shared/config';
 
 let socket: WebSocket | null = null;
 const RECONNECT_MS = 1000;
 
 function backendUrl(): string {
-  if (import.meta.env.DEV) {
-    const port = import.meta.env.VITE_BACKEND_PORT || DEFAULT_BACKEND_PORT;
-    return `ws://${location.hostname}:${port}/ws`;
-  }
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
 }
 
@@ -58,12 +53,16 @@ function applyEvent(e: ServerEvent) {
   const s = useStore.getState();
   switch (e.type) {
     case 'state':
+      s.setSessionState(e.sessions, e.activeSessionId);
       s.setTasks(e.tasks);
       s.clearChat();
       e.chat.forEach(s.addChat);
       s.setBrowser(e.browser);
       s.setOverlay(e.overlay);
       s.setSetup(e.setup.ready, e.setup.profile ?? null);
+      break;
+    case 'sessions':
+      s.setSessionState(e.sessions, e.activeSessionId);
       break;
     case 'task_added':
     case 'task_updated':

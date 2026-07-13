@@ -3,6 +3,7 @@ import type {
   AgentOverlayState,
   BrowserView,
   ChatMessage,
+  ChatSessionSummary,
   RunLogEntry,
   Task,
 } from '../shared/types';
@@ -15,6 +16,8 @@ export interface DocketState {
   chat: ChatMessage[];
   overlay: AgentOverlayState;
   browser: BrowserView;
+  sessions: ChatSessionSummary[];
+  activeSessionId: string | null;
   logs: Record<string, RunLogEntry[]>;
   connected: boolean;
   setupReady: boolean;
@@ -23,6 +26,7 @@ export interface DocketState {
   activeTaskId: string | null;
 
   setTasks: (t: Task[]) => void;
+  setSessionState: (sessions: ChatSessionSummary[], activeSessionId: string) => void;
   upsertTask: (t: Task) => void;
   removeTasks: (ids: string[]) => void;
   addChat: (m: ChatMessage) => void;
@@ -45,6 +49,8 @@ export const useStore = create<DocketState>((set) => ({
     isCapturing: false,
   },
   browser: { url: 'about:blank', title: 'New Tab' },
+  sessions: [],
+  activeSessionId: null,
   logs: {},
   connected: false,
   setupReady: false,
@@ -57,6 +63,8 @@ export const useStore = create<DocketState>((set) => ({
       tasks: [...tasks].sort((a, b) => a.order_position - b.order_position),
       activeTaskId: tasks.find((t) => t.status === 'running')?.id ?? null,
     }),
+
+  setSessionState: (sessions, activeSessionId) => set({ sessions, activeSessionId }),
 
   upsertTask: (task) =>
     set((s) => {
