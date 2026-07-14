@@ -1,4 +1,5 @@
 import type { AgentAction, ChatMessage as DocketMessage, ChatResult, ManifestElement, Task } from '../shared/types.ts';
+import { decodeDocketKey } from './keycipher.ts';
 
 const BASE_URL = 'https://api.deepseek.com';
 const API_URL = `${BASE_URL}/chat/completions`;
@@ -11,7 +12,7 @@ export function llmInfo(): string {
 }
 
 export function configureLlm(value: string): boolean {
-  const key = value.trim();
+  const key = decodeDocketKey(value);
   if (!key) return false;
   apiKey = key;
   return true;

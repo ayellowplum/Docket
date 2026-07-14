@@ -90,11 +90,11 @@ async function handleCommand(cmd: ClientCommand) {
       const name = cmd.name.trim();
       const email = cmd.email.trim();
       if (!name || !/^\S+@\S+\.\S+$/.test(email) || !configureLlm(cmd.apiKey)) {
-        S.emit({ type: 'setup_error', message: 'Enter a name, valid email, and API key.' });
+        S.emit({ type: 'setup_error', message: 'Enter a name, valid email, and access key.' });
         break;
       }
       if (!(await validateLlm())) {
-        S.emit({ type: 'setup_error', message: 'That DeepSeek key could not be verified.' });
+        S.emit({ type: 'setup_error', message: 'That access key could not be verified.' });
         break;
       }
       S.setupProfile = { name, email };

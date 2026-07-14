@@ -43,7 +43,7 @@ export function SetupScreen() {
         </div>
         <label>Name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label>
         <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-        <label>DeepSeek key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></label>
+        <label>Docket access key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></label>
         {error && <div className="setup-error">{error}</div>}
         <button disabled={!connected || !name.trim() || !email.trim() || !apiKey.trim()}>Continue</button>
       </form>
